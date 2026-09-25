@@ -1,8 +1,5 @@
 import { SignIn } from "@clerk/nextjs";
 
-const Signin= ()=>{
-
-    return <SignIn />
+export default function Signin() {
+  return <SignIn fallbackRedirectUrl="/dashboard" />;
 }
-
-export default Signin

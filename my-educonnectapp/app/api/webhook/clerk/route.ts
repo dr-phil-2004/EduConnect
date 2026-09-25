@@ -5,7 +5,7 @@
 import { Webhook } from "svix";
 import { headers } from "next/headers";
 import { WebhookEvent } from "@clerk/nextjs/server";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/prismaClient";
 import { clerkClient } from "@clerk/nextjs/server";
 
 const WEBHOOK_SECRET = process.env.CLERK_WEBHOOK_SECRET!;
@@ -31,14 +31,22 @@ export async function POST(req: Request) {
       "svix-id": svix_id,
       "svix-timestamp": svix_timestamp,
       "svix-signature": svix_signature,
-    }) as WebhookEvent;
+    }) as unknown as WebhookEvent;
   } catch (err) {
     return new Response("Invalid signature", { status: 400 });
   }
 
   // ── Création d'un utilisateur ──
   if (evt.type === "user.created") {
-    const { id, email_addresses, first_name, last_name } = evt.data;
+    const { id, email_addresses, first_name, last_name, public_metadata, unsafe_metadata } = evt.data;
+
+    // Le rôle peut être choisi côté client via unsafeMetadata lors de l'inscription.
+    const chosenRole =
+      ((unsafe_metadata as { role?: string } | undefined)?.role === "TEACHER"
+        ? "TEACHER"
+        : ((public_metadata as { role?: string } | undefined)?.role === "TEACHER"
+          ? "TEACHER"
+          : "STUDENT")) as "STUDENT" | "TEACHER";
 
     const user = await prisma.user.create({
       data: {
@@ -46,7 +54,7 @@ export async function POST(req: Request) {
         email: email_addresses[0]?.email_address ?? "",
         firstName: first_name ?? undefined,
         lastName: last_name ?? undefined,
-        role: "STUDENT", // rôle par défaut ; changé manuellement par un ADMIN ensuite
+        role: chosenRole,
       },
     });
 
@@ -56,6 +64,20 @@ export async function POST(req: Request) {
     await client.users.updateUserMetadata(id, {
       publicMetadata: { role: user.role },
     });
+  }
+
+  // ── Mise à jour (ex: role changé via onboarding) ──
+  if (evt.type === "user.updated") {
+    const { id, public_metadata } = evt.data;
+    const role = (public_metadata as { role?: string } | undefined)?.role;
+    if (id && role) {
+      await prisma.user
+        .updateMany({
+          where: { clerkId: id },
+          data: { role: role as "STUDENT" | "TEACHER" | "ADMIN" | "MINISTRY" },
+        })
+        .catch(() => {});
+    }
   }
 
   // ── Suppression ──
